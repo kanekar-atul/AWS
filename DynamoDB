@@ -1,0 +1,66 @@
+const TOTAL_ALLOWED_PER_REQUEST = 10;
+const totalItems = 200;
+let pivot = 0;
+let end = TOTAL_ALLOWED_PER_REQUEST;
+            
+while (pivot !== TOTAL_ALLOWED_PER_REQUEST) {
+                const items = [];
+                for (let i = pivot; i < end; i++) {
+                    items.push({
+                        DeleteRequest: {
+                            Key: {
+                                customerId: Id
+                            }
+                        }
+                    });
+                }
+                const params = {
+                    RequestItems: {
+                        [key]: items
+                    }
+                };
+                await batchWrite([documentClient.batchWrite(params).promise()], key, 0); 
+                pivot = end;
+                end = (end + TOTAL_ALLOWED_PER_REQUEST > totalItems) ? totalItems : (end + TOTAL_ALLOWED_PER_REQUEST);
+            }
+            
+            
+            
+            
+const batchWrite = async (batch, key, retries = 0) => {
+    try {
+        const batchResponse = await Promise.all(batch);
+        const unprocessedItems = [];
+        for (let i = 0; i < batchResponse.length; i++) {
+            if (batchResponse[i].UnprocessedItems[key]) {
+                unprocessedItems.push(documentClient.batchWrite({ RequestItems: batchResponse[i].UnprocessedItems }).promise());
+            }
+        }
+        if (unprocessedItems.length > 0) {
+            // add a 200ms delay to avoid instant multiple calls
+            await new Promise(resolve => setTimeout(resolve, 200));
+            await batchWrite(unprocessedItems, key);
+        }
+    } catch (err) {
+        if (retries < 3) {
+            retries++;
+            const customLogOutput = context.logBuilder.withMessage(`batchWrite failed, waiting 200 milliseconds then retrying. Attempt number: ${retries}`).buildLogEntry();
+            context.log.info(customLogOutput.info);
+            await new Promise(resolve => setTimeout(resolve, 200));
+            await batchWrite(batch, key, retries);
+        } else {
+            throw new DynamoDBAccessError({ message: 'category batch write error' }, { message: `${err.name} - ${err.message}` });
+        }
+    }
+};
+
+
+class DynamoDBAccessError extends BaseError {
+    constructor (logDetail, responseDetail) {
+        super('Dynamo DB Access Error', logDetail, responseDetail);
+        this.code = 'SYST-9000';
+        this.retry = true;
+        this.overrideResponseError = new InternalError();
+    }
+}
+
